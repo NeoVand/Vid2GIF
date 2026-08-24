@@ -1,0 +1,17 @@
+# Swift Package Manager
+.build/
+.swiftpm/
+
+# App bundle output
+build/
+
+# Icon build intermediates (AppIcon.icns is committed; the iconset is transient)
+Resources/AppIcon.iconset/
+
+# Xcode (if a project is ever generated for App Store distribution)
+*.xcodeproj/
+xcuserdata/
+DerivedData/
+
+# macOS
+.DS_Store
