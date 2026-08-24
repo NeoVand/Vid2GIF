@@ -39,9 +39,9 @@ func drawIcon(size s: CGFloat) {
     cloud(0.45, 0.55, 0.35, 0.25, light: true)
 
     // Wordmark with a soft drop shadow.
-    let fontSize = s * 0.30
+    let fontSize = s * 0.26
     let font = NSFont.systemFont(ofSize: fontSize, weight: .heavy)
-    let text = "GIF" as NSString
+    let text = "V2G" as NSString
 
     let shadow = NSShadow()
     shadow.shadowColor = NSColor.black.withAlphaComponent(0.45)

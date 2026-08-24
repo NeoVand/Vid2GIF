@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 /// Dark, cloudy, desaturated palette — slate grays with a muted steel accent.
 enum Theme {
@@ -17,11 +18,11 @@ enum Theme {
     static let textSecondary = Color.white.opacity(0.52)
     static let textTertiary = Color.white.opacity(0.30)
 
-    /// Subtle slate gradient for the primary action.
+    /// Subtle slate gradient for the primary action — barely lifted off the panels.
     static let accentGradient = LinearGradient(
         colors: [
-            Color(red: 0.29, green: 0.34, blue: 0.42),                    // #4A5769
-            Color(red: 0.18, green: 0.21, blue: 0.26),                    // #2E3542
+            Color(red: 0.165, green: 0.192, blue: 0.235),                 // #2A3140
+            Color(red: 0.106, green: 0.122, blue: 0.153),                 // #1B1F27
         ],
         startPoint: .top, endPoint: .bottom
     )
@@ -51,18 +52,19 @@ extension View {
 /// Primary action button: soft slate gradient with a hairline highlight.
 struct GradientButtonStyle: ButtonStyle {
     var disabled = false
+    var height: CGFloat = 44
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.system(size: 14, weight: .semibold))
             .foregroundStyle(Theme.textPrimary)
             .padding(.horizontal, 20)
-            .padding(.vertical, 12)
+            .frame(minHeight: height)
             .background(
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .fill(Theme.accentGradient)
                     .overlay(
                         RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .strokeBorder(Color.white.opacity(0.14), lineWidth: 1)
+                            .strokeBorder(Color.white.opacity(0.09), lineWidth: 1)
                     )
                     .opacity(disabled ? 0.35 : (configuration.isPressed ? 0.75 : 1))
             )
@@ -85,11 +87,43 @@ struct SubtleButtonStyle: ButtonStyle {
     }
 }
 
+/// Renders a bundled HugeIcons SVG as a tintable template image.
+/// Icons live in Sources/Vid2GIF/Icons (MIT-licensed, hugeicons.com).
+struct HugeIcon: View {
+    let name: String
+    var size: CGFloat = 14
+
+    var body: some View {
+        Image(nsImage: Self.image(named: name))
+            .renderingMode(.template)
+            .resizable()
+            .scaledToFit()
+            .frame(width: size, height: size)
+    }
+
+    private static var cache: [String: NSImage] = [:]
+
+    private static func image(named name: String) -> NSImage {
+        if let cached = cache[name] { return cached }
+        let img: NSImage
+        if let url = Bundle.module.url(forResource: name, withExtension: "svg", subdirectory: "Icons"),
+           let loaded = NSImage(contentsOf: url) {
+            img = loaded
+        } else {
+            img = NSImage(size: NSSize(width: 24, height: 24))
+        }
+        img.isTemplate = true
+        cache[name] = img
+        return img
+    }
+}
+
 /// App-styled segmented control — replaces the system picker so every control
 /// shares the same muted palette.
 struct SegmentedControl<T: Hashable>: View {
     let options: [(label: String, value: T)]
     @Binding var selection: T
+    var fillWidth = false
 
     var body: some View {
         HStack(spacing: 2) {
@@ -101,8 +135,11 @@ struct SegmentedControl<T: Hashable>: View {
                     Text(option.label)
                         .font(.system(size: 11, weight: selected ? .semibold : .medium))
                         .foregroundStyle(selected ? Theme.textPrimary : Theme.textSecondary)
+                        .lineLimit(1)
+                        .fixedSize()
                         .padding(.horizontal, 10)
                         .padding(.vertical, 5)
+                        .frame(maxWidth: fillWidth ? .infinity : nil)
                         .background(
                             RoundedRectangle(cornerRadius: 6, style: .continuous)
                                 .fill(selected ? Theme.selection : .clear)
