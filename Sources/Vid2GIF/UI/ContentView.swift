@@ -59,8 +59,6 @@ struct ContentView: View {
                 topBar
                 preview
                 TimelineView()
-                    .padding(14)
-                    .panel()
             }
 
             ControlsPanel()
@@ -73,42 +71,42 @@ struct ContentView: View {
     }
 
     private var topBar: some View {
-        ZStack {
-            HStack(spacing: 10) {
-                Button {
-                    showAbout = true
-                } label: {
-                    HStack(spacing: 7) {
-                        Image(systemName: "film.stack")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(Theme.accent)
-                        Text("Vid2GIF")
-                            .font(.system(size: 13, weight: .bold))
-                            .foregroundStyle(Theme.textPrimary)
-                    }
+        HStack(spacing: 10) {
+            Button {
+                showAbout = true
+            } label: {
+                HStack(spacing: 7) {
+                    Image(nsImage: NSApp.applicationIconImage)
+                        .resizable()
+                        .frame(width: 22, height: 22)
+                    Text("Vid2GIF")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(Theme.textPrimary)
                 }
-                .buttonStyle(.plain)
-                .help("About Vid2GIF")
+            }
+            .buttonStyle(.plain)
+            .help("About Vid2GIF")
 
-                if let url = model.videoURL {
-                    Text(url.lastPathComponent)
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(Theme.textSecondary)
-                        .lineLimit(1)
-                    Text("\(Int(model.sourceSize.width))×\(Int(model.sourceSize.height)) · \(Int(model.sourceFPS.rounded())) fps · \(formatTime(model.duration))")
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(Theme.textTertiary)
-                        .lineLimit(1)
-                }
-
-                Spacer()
-
-                Button("Open…") { model.presentOpenPanel() }
-                    .buttonStyle(SubtleButtonStyle())
-                    .keyboardShortcut("o", modifiers: .command)
+            if let url = model.videoURL {
+                Text(url.lastPathComponent)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(Theme.textSecondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Text("\(Int(model.sourceSize.width))×\(Int(model.sourceSize.height)) · \(Int(model.sourceFPS.rounded())) fps · \(formatTime(model.duration))")
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(Theme.textTertiary)
+                    .lineLimit(1)
+                    .layoutPriority(-1)
             }
 
+            Spacer(minLength: 16)
+
             previewModeToggle
+
+            Button("Open…") { model.presentOpenPanel() }
+                .buttonStyle(SubtleButtonStyle())
+                .keyboardShortcut("o", modifiers: .command)
         }
         .padding(.top, 14) // clear the traffic lights with transparent titlebar
     }
@@ -142,10 +140,9 @@ struct ContentView: View {
                     .fill(.black.opacity(0.5))
                     .frame(width: 64, height: 64)
                     .overlay(
-                        Image(systemName: "play.fill")
-                            .font(.system(size: 24, weight: .bold))
+                        HugeIcon(name: "play", size: 28)
                             .foregroundStyle(.white)
-                            .offset(x: 2)
+                            .offset(x: 1)
                     )
                     .allowsHitTesting(false)
             }
@@ -313,8 +310,7 @@ struct AboutView: View {
                 NSWorkspace.shared.open(URL(string: "https://github.com/NeoVand/Vid2GIF")!)
             } label: {
                 HStack(spacing: 7) {
-                    GitHubMark()
-                        .frame(width: 15, height: 15)
+                    HugeIcon(name: "github", size: 15)
                     Text("View on GitHub")
                 }
                 .frame(maxWidth: .infinity)
@@ -331,51 +327,6 @@ struct AboutView: View {
     }
 }
 
-/// The GitHub octocat silhouette as a vector shape (no assets needed).
-struct GitHubMark: View {
-    var body: some View {
-        GitHubShape()
-            .fill(Theme.textPrimary)
-            .aspectRatio(1, contentMode: .fit)
-    }
-}
-
-struct GitHubShape: Shape {
-    func path(in rect: CGRect) -> Path {
-        // GitHub mark, normalized from the official 16×16 octicon path.
-        let s = min(rect.width, rect.height) / 16
-        var p = Path()
-        p.move(to: CGPoint(x: 8, y: 0))
-        p.addCurve(to: CGPoint(x: 0, y: 8.2), control1: CGPoint(x: 3.58, y: 0), control2: CGPoint(x: 0, y: 3.67))
-        p.addCurve(to: CGPoint(x: 5.47, y: 15.98), control1: CGPoint(x: 0, y: 11.82), control2: CGPoint(x: 2.29, y: 14.9))
-        p.addCurve(to: CGPoint(x: 6.02, y: 15.59), control1: CGPoint(x: 5.87, y: 16.06), control2: CGPoint(x: 6.02, y: 15.81))
-        p.addCurve(to: CGPoint(x: 6.01, y: 14.19), control1: CGPoint(x: 6.02, y: 15.4), control2: CGPoint(x: 6.01, y: 14.87))
-        p.addCurve(to: CGPoint(x: 3.31, y: 13.19), control1: CGPoint(x: 3.78, y: 14.69), control2: CGPoint(x: 3.31, y: 13.19))
-        p.addCurve(to: CGPoint(x: 2.18, y: 11.66), control1: CGPoint(x: 2.95, y: 12.25), control2: CGPoint(x: 2.42, y: 11.86))
-        p.addCurve(to: CGPoint(x: 2.26, y: 11.09), control1: CGPoint(x: 1.26, y: 11.02), control2: CGPoint(x: 2.25, y: 11.03))
-        p.addCurve(to: CGPoint(x: 3.9, y: 12.22), control1: CGPoint(x: 3.28, y: 11.16), control2: CGPoint(x: 3.82, y: 12.16))
-        p.addCurve(to: CGPoint(x: 6.94, y: 13.11), control1: CGPoint(x: 4.8, y: 13.81), control2: CGPoint(x: 6.26, y: 13.36))
-        p.addCurve(to: CGPoint(x: 7.61, y: 11.68), control1: CGPoint(x: 7.03, y: 12.44), control2: CGPoint(x: 7.29, y: 11.98))
-        p.addCurve(to: CGPoint(x: 3.95, y: 7.62), control1: CGPoint(x: 5.83, y: 11.47), control2: CGPoint(x: 3.95, y: 10.77))
-        p.addCurve(to: CGPoint(x: 4.79, y: 5.42), control1: CGPoint(x: 3.95, y: 6.72), control2: CGPoint(x: 4.27, y: 5.99))
-        p.addCurve(to: CGPoint(x: 4.87, y: 3.24), control1: CGPoint(x: 4.7, y: 5.21), control2: CGPoint(x: 4.42, y: 4.38))
-        p.addCurve(to: CGPoint(x: 7.12, y: 4.08), control1: CGPoint(x: 4.87, y: 3.24), control2: CGPoint(x: 5.55, y: 3.02))
-        p.addCurve(to: CGPoint(x: 8, y: 3.96), control1: CGPoint(x: 7.41, y: 4), control2: CGPoint(x: 7.7, y: 3.96))
-        p.addCurve(to: CGPoint(x: 8.88, y: 4.08), control1: CGPoint(x: 8.3, y: 3.96), control2: CGPoint(x: 8.59, y: 4))
-        p.addCurve(to: CGPoint(x: 11.13, y: 3.24), control1: CGPoint(x: 10.45, y: 3.02), control2: CGPoint(x: 11.13, y: 3.24))
-        p.addCurve(to: CGPoint(x: 11.21, y: 5.42), control1: CGPoint(x: 11.58, y: 4.38), control2: CGPoint(x: 11.3, y: 5.21))
-        p.addCurve(to: CGPoint(x: 12.05, y: 7.62), control1: CGPoint(x: 11.73, y: 5.99), control2: CGPoint(x: 12.05, y: 6.72))
-        p.addCurve(to: CGPoint(x: 8.38, y: 11.67), control1: CGPoint(x: 12.05, y: 10.78), control2: CGPoint(x: 10.16, y: 11.47))
-        p.addCurve(to: CGPoint(x: 9.1, y: 13.23), control1: CGPoint(x: 8.66, y: 11.91), control2: CGPoint(x: 9.1, y: 12.39))
-        p.addCurve(to: CGPoint(x: 9.08, y: 15.59), control1: CGPoint(x: 9.1, y: 14.35), control2: CGPoint(x: 9.08, y: 15.26))
-        p.addCurve(to: CGPoint(x: 9.63, y: 15.97), control1: CGPoint(x: 9.08, y: 15.82), control2: CGPoint(x: 9.23, y: 16.07))
-        p.addCurve(to: CGPoint(x: 16, y: 8.2), control1: CGPoint(x: 12.81, y: 14.9), control2: CGPoint(x: 16, y: 11.82))
-        p.addCurve(to: CGPoint(x: 8, y: 0), control1: CGPoint(x: 16, y: 3.67), control2: CGPoint(x: 12.42, y: 0))
-        p.closeSubpath()
-        return p.applying(CGAffineTransform(scaleX: s, y: s))
-    }
-}
-
 // MARK: - Empty state
 
 struct EmptyStateView: View {
@@ -389,9 +340,8 @@ struct EmptyStateView: View {
                     .fill(Theme.accentGradient)
                     .frame(width: 96, height: 96)
                     .opacity(0.15)
-                Image(systemName: "film.stack")
-                    .font(.system(size: 42, weight: .medium))
-                    .foregroundStyle(Theme.accentGradient)
+                HugeIcon(name: "video", size: 44)
+                    .foregroundStyle(Theme.accent)
             }
 
             VStack(spacing: 8) {
@@ -409,7 +359,7 @@ struct EmptyStateView: View {
                 model.presentOpenPanel()
             } label: {
                 HStack(spacing: 8) {
-                    Image(systemName: "folder")
+                    HugeIcon(name: "folder-open", size: 15)
                     Text("Browse Files")
                 }
                 .frame(width: 160)
@@ -486,8 +436,8 @@ struct ExportResultCard: View {
         VStack(spacing: 12) {
             HStack {
                 HStack(spacing: 6) {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundStyle(.green)
+                    HugeIcon(name: "checkmark-circle", size: 15)
+                        .foregroundStyle(Theme.accent)
                     Text("GIF Exported")
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(Theme.textPrimary)
@@ -496,8 +446,7 @@ struct ExportResultCard: View {
                 Button {
                     model.exportResult = nil
                 } label: {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 10, weight: .bold))
+                    HugeIcon(name: "cancel", size: 10)
                         .foregroundStyle(Theme.textSecondary)
                         .frame(width: 22, height: 22)
                         .background(Circle().fill(Color.white.opacity(0.08)))
@@ -529,8 +478,11 @@ struct ExportResultCard: View {
                 Button {
                     NSWorkspace.shared.activateFileViewerSelecting([result.url])
                 } label: {
-                    Label("Reveal in Finder", systemImage: "magnifyingglass")
-                        .frame(maxWidth: .infinity)
+                    HStack(spacing: 6) {
+                        HugeIcon(name: "search", size: 13)
+                        Text("Reveal in Finder")
+                    }
+                    .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(SubtleButtonStyle())
 
@@ -539,8 +491,11 @@ struct ExportResultCard: View {
                     pb.clearContents()
                     pb.writeObjects([result.url as NSURL])
                 } label: {
-                    Label("Copy", systemImage: "doc.on.doc")
-                        .frame(maxWidth: .infinity)
+                    HStack(spacing: 6) {
+                        HugeIcon(name: "copy", size: 13)
+                        Text("Copy")
+                    }
+                    .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(SubtleButtonStyle())
                 .help("Copy the GIF file — paste into Slack, Messages, etc.")

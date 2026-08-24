@@ -5,7 +5,7 @@ struct TimelineView: View {
     @EnvironmentObject var model: AppModel
 
     private let handleWidth: CGFloat = 12
-    private let stripHeight: CGFloat = 64
+    private let stripHeight: CGFloat = 52
 
     var body: some View {
         VStack(spacing: 10) {
@@ -37,19 +37,18 @@ struct TimelineView: View {
             Spacer()
 
             HStack(spacing: 8) {
-                transportButton("backward.frame.fill") { model.stepFrame(-1) }
+                transportButton("previous") { model.stepFrame(-1) }
                 Button {
                     model.togglePlayback()
                 } label: {
-                    Image(systemName: model.isPlaying ? "pause.fill" : "play.fill")
-                        .font(.system(size: 15, weight: .semibold))
+                    HugeIcon(name: model.isPlaying ? "pause" : "play", size: 17)
                         .foregroundStyle(.black)
                         .frame(width: 36, height: 36)
                         .background(Circle().fill(.white))
                 }
                 .buttonStyle(.plain)
                 .help("Play / Pause (Space)")
-                transportButton("forward.frame.fill") { model.stepFrame(1) }
+                transportButton("next") { model.stepFrame(1) }
             }
 
             Spacer()
@@ -64,10 +63,9 @@ struct TimelineView: View {
         }
     }
 
-    private func transportButton(_ symbol: String, action: @escaping () -> Void) -> some View {
+    private func transportButton(_ icon: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Image(systemName: symbol)
-                .font(.system(size: 13))
+            HugeIcon(name: icon, size: 14)
                 .foregroundStyle(Theme.textPrimary)
                 .frame(width: 30, height: 30)
                 .background(Circle().fill(Color.white.opacity(0.08)))

@@ -4,6 +4,8 @@ A blazingly fast, native macOS video → GIF converter. Zero dependencies — pu
 
 ![](https://img.shields.io/badge/platform-macOS%2014%2B-blue) ![](https://img.shields.io/badge/deps-none-brightgreen)
 
+![Vid2GIF](assets/screenshot.png)
+
 ## Why it's fast
 
 - **Hardware decode**: frames come off the VideoToolbox H.264/HEVC decoder, never a software path.
@@ -62,3 +64,7 @@ Sources/Vid2GIF/
 ```
 
 Export is two passes: pass 1 samples ~24 frames via `AVAssetImageGenerator` to build a global palette; pass 2 streams every frame through quantize → LZW → disk, so memory stays flat regardless of clip length.
+
+## Credits
+
+Developed by [Neo Mohsenvand](https://github.com/NeoVand). UI icons from [HugeIcons](https://hugeicons.com) (free set, MIT), vendored as SVGs in `Sources/Vid2GIF/Icons/`.

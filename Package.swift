@@ -7,7 +7,8 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "Vid2GIF",
-            path: "Sources/Vid2GIF"
+            path: "Sources/Vid2GIF",
+            resources: [.copy("Icons")]
         )
     ]
 )

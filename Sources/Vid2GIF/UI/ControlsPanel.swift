@@ -1,6 +1,8 @@
 import SwiftUI
 
 /// Right-hand sidebar: output configuration + live summary + export.
+/// A plain VStack sized to the window — the Result panel stretches to absorb
+/// leftover height so the column always packs the full window.
 struct ControlsPanel: View {
     @EnvironmentObject var model: AppModel
 
@@ -10,15 +12,10 @@ struct ControlsPanel: View {
 
     var body: some View {
         VStack(spacing: 14) {
-            ScrollView {
-                VStack(spacing: 14) {
-                    outputSection
-                    qualitySection
-                    summarySection
-                }
-            }
-            .scrollIndicators(.never)
-
+            outputSection
+            qualitySection
+            summarySection
+                .frame(maxHeight: .infinity, alignment: .top)
             exportArea
         }
     }
@@ -34,10 +31,10 @@ struct ControlsPanel: View {
     }
 
     private var outputSection: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 16) {
             sectionHeader("Output")
 
-            labeledRow("Width") {
+            labeledRow("Width", icon: "ruler") {
                 Picker("", selection: $model.settings.outputWidth) {
                     ForEach(availableWidths, id: \.self) { w in
                         Text(w == sourceWidth ? "\(w) px (source)" : "\(w) px").tag(w)
@@ -47,7 +44,7 @@ struct ControlsPanel: View {
                 .frame(width: 130)
             }
 
-            labeledRow("Frame rate") {
+            labeledRow("Frame rate", icon: "clock") {
                 Picker("", selection: $model.settings.fps) {
                     ForEach(availableFPS, id: \.self) { f in
                         Text("\(Int(f)) fps").tag(f)
@@ -57,8 +54,8 @@ struct ControlsPanel: View {
                 .frame(width: 130)
             }
 
-            VStack(spacing: 6) {
-                labeledRow("Speed") {
+            VStack(spacing: 10) {
+                labeledRow("Speed", icon: "speed") {
                     Text(String(format: "%.2g×", model.settings.speed))
                         .font(.system(size: 12, weight: .semibold, design: .monospaced))
                         .foregroundStyle(Theme.textPrimary)
@@ -69,66 +66,68 @@ struct ControlsPanel: View {
                     }
             }
         }
-        .padding(14)
+        .padding(16)
         .panel()
     }
 
     private var qualitySection: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 16) {
             sectionHeader("Quality")
 
-            labeledRow("Colors") {
+            labeledRow("Colors", icon: "palette") {
                 SegmentedControl(
                     options: colorPresets.map { (label: $0 == 255 ? "256" : "\($0)", value: $0) },
                     selection: $model.settings.maxColors
                 )
             }
 
-            VStack(alignment: .leading, spacing: 6) {
-                labeledRow("Dithering") {
-                    SegmentedControl(
-                        options: DitherMode.allCases.map { (label: $0.rawValue, value: $0) },
-                        selection: $model.settings.dither
-                    )
-                }
+            VStack(alignment: .leading, spacing: 8) {
+                rowLabel("Dithering", icon: "blur")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                SegmentedControl(
+                    options: DitherMode.allCases.map { (label: $0.rawValue, value: $0) },
+                    selection: $model.settings.dither,
+                    fillWidth: true
+                )
                 Text(model.settings.dither.help)
                     .font(.system(size: 10))
                     .foregroundStyle(Theme.textTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
 
-            Toggle(isOn: $model.settings.loopForever) {
-                toggleLabel("Loop forever", detail: "Repeat endlessly")
-            }
-            .toggleStyle(.switch)
-            .controlSize(.small)
-            .tint(Theme.accent)
+            toggleRow(
+                icon: "repeat", title: "Loop forever", detail: "Repeat endlessly",
+                isOn: $model.settings.loopForever
+            )
 
-            Toggle(isOn: $model.settings.useDelta) {
-                toggleLabel("Optimize static areas", detail: "Encode only changed pixels — much smaller files")
-            }
-            .toggleStyle(.switch)
-            .controlSize(.small)
-            .tint(Theme.accent)
+            toggleRow(
+                icon: "layers", title: "Optimize static areas",
+                detail: "Encode only changed pixels — much smaller files",
+                isOn: $model.settings.useDelta
+            )
         }
-        .padding(14)
+        .padding(16)
         .panel()
     }
 
     private var summarySection: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: 14) {
             sectionHeader("Result")
-            summaryRow("Dimensions", "\(model.outputPixelSize.width) × \(model.outputPixelSize.height)")
-            summaryRow("Duration", String(format: "%.2fs", model.outputDuration))
+            summaryRow("Dimensions", icon: "aspect-ratio",
+                       "\(model.outputPixelSize.width) × \(model.outputPixelSize.height)")
+            summaryRow("Duration", icon: "timer", String(format: "%.2fs", model.outputDuration))
             if let result = model.previewResult, model.previewMode == .gif, !model.isGeneratingPreview {
-                summaryRow("Frames", "\(result.frames)")
-                summaryRow("File size", formatBytes(result.bytes))
+                summaryRow("Frames", icon: "film", "\(result.frames)")
+                summaryRow("File size", icon: "hard-drive", formatBytes(result.bytes))
             } else {
-                summaryRow("Frames", "\(Int((model.outputDuration * model.settings.fps).rounded()))")
-                summaryRow("Est. size", "~" + formatBytes(model.estimatedBytes))
+                summaryRow("Frames", icon: "film",
+                           "\(Int((model.outputDuration * model.settings.fps).rounded()))")
+                summaryRow("Est. size", icon: "hard-drive", "~" + formatBytes(model.estimatedBytes))
             }
         }
-        .padding(14)
+        .padding(16)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .panel()
     }
 
@@ -137,12 +136,12 @@ struct ControlsPanel: View {
             model.startExport()
         } label: {
             HStack(spacing: 8) {
-                Image(systemName: "sparkles")
+                HugeIcon(name: "sparkles", size: 15)
                 Text("Export GIF")
             }
             .frame(maxWidth: .infinity)
         }
-        .buttonStyle(GradientButtonStyle(disabled: model.isExporting || !model.hasVideo))
+        .buttonStyle(GradientButtonStyle(disabled: model.isExporting || !model.hasVideo, height: 52))
         .disabled(model.isExporting || !model.hasVideo)
         .keyboardShortcut("e", modifiers: .command)
         .help("Export GIF (⌘E)")
@@ -173,33 +172,52 @@ struct ControlsPanel: View {
         return fs
     }
 
-    private func labeledRow(_ label: String, @ViewBuilder content: () -> some View) -> some View {
-        HStack {
+    private func rowLabel(_ label: String, icon: String) -> some View {
+        HStack(spacing: 9) {
+            HugeIcon(name: icon, size: 15)
+                .foregroundStyle(Theme.accent)
             Text(label)
                 .font(.system(size: 12))
                 .foregroundStyle(Theme.textSecondary)
+        }
+    }
+
+    private func labeledRow(
+        _ label: String, icon: String, @ViewBuilder content: () -> some View
+    ) -> some View {
+        HStack {
+            rowLabel(label, icon: icon)
             Spacer()
             content()
         }
     }
 
-    private func toggleLabel(_ title: String, detail: String) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(title)
-                .font(.system(size: 12))
-                .foregroundStyle(Theme.textPrimary)
-            Text(detail)
-                .font(.system(size: 10))
-                .foregroundStyle(Theme.textTertiary)
+    private func toggleRow(
+        icon: String, title: String, detail: String, isOn: Binding<Bool>
+    ) -> some View {
+        HStack(alignment: .center, spacing: 9) {
+            HugeIcon(name: icon, size: 15)
+                .foregroundStyle(Theme.accent)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.textPrimary)
+                Text(detail)
+                    .font(.system(size: 10))
+                    .foregroundStyle(Theme.textTertiary)
+            }
+            Spacer()
+            Toggle("", isOn: isOn)
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .tint(Theme.accent)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func summaryRow(_ label: String, _ value: String) -> some View {
+    private func summaryRow(_ label: String, icon: String, _ value: String) -> some View {
         HStack {
-            Text(label)
-                .font(.system(size: 12))
-                .foregroundStyle(Theme.textSecondary)
+            rowLabel(label, icon: icon)
             Spacer()
             Text(value)
                 .font(.system(size: 12, weight: .semibold, design: .monospaced))

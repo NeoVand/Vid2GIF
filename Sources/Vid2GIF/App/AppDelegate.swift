@@ -27,7 +27,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
-        window.minSize = NSSize(width: 900, height: 620)
+        window.minSize = NSSize(width: 940, height: 700)
         window.contentViewController = hosting
         window.setContentSize(NSSize(width: 1180, height: 780))
         window.center()
@@ -62,6 +62,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let fileMenuItem = NSMenuItem()
         let fileMenu = NSMenu(title: "File")
         fileMenu.addItem(withTitle: "Open…", action: #selector(openDocument), keyEquivalent: "o")
+        fileMenu.addItem(withTitle: "Save Window Snapshot", action: #selector(saveSnapshot), keyEquivalent: "S")
         fileMenu.addItem(withTitle: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
         fileMenuItem.submenu = fileMenu
         mainMenu.addItem(fileMenuItem)
@@ -81,5 +82,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func openDocument() {
         model.presentOpenPanel()
+    }
+
+    /// Renders the window (including titlebar and rounded corners) to a PNG on
+    /// the Desktop — used for docs/screenshots; needs no screen-recording rights.
+    @objc private func saveSnapshot() {
+        guard let window,
+              let frameView = window.contentView?.superview,
+              let rep = frameView.bitmapImageRepForCachingDisplay(in: frameView.bounds)
+        else { return }
+        frameView.cacheDisplay(in: frameView.bounds, to: rep)
+        guard let png = rep.representation(using: .png, properties: [:]) else { return }
+        let url = FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("vid2gif-window.png")
+        try? png.write(to: url)
     }
 }
