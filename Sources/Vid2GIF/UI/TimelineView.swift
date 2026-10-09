@@ -23,6 +23,7 @@ struct TimelineView: View {
             }
             .frame(height: stripHeight)
         }
+        .disabled(model.isExporting || model.isLoading)
     }
 
     // MARK: transport
@@ -37,6 +38,17 @@ struct TimelineView: View {
             Spacer()
 
             HStack(spacing: 8) {
+                if model.settings.format == .webm {
+                    Button {
+                        model.isPreviewMuted.toggle()
+                    } label: {
+                        Image(systemName: model.isPreviewMuted ? "speaker.slash" : "speaker.wave.2")
+                            .frame(width: 30, height: 30)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!model.settings.includeAudio)
+                    .help(model.isPreviewMuted ? "Unmute preview" : "Mute preview")
+                }
                 transportButton("previous") { model.stepFrame(-1) }
                 Button {
                     model.togglePlayback()
@@ -150,6 +162,7 @@ struct TimelineView: View {
             .gesture(
                 DragGesture(minimumDistance: 1, coordinateSpace: .named("strip"))
                     .onChanged { v in
+                        model.beginSettingsAdjustment()
                         let t = timeFor(v.location.x, width: width)
                         if leading {
                             model.trimStart = min(max(0, t), model.trimEnd - 0.05)
@@ -159,6 +172,7 @@ struct TimelineView: View {
                             model.seek(to: model.trimEnd)
                         }
                     }
+                    .onEnded { _ in model.endSettingsAdjustment() }
             )
     }
 

@@ -22,6 +22,7 @@ struct ControlsPanel: View {
                 .frame(maxHeight: .infinity, alignment: .top)
             exportArea
         }
+        .disabled(model.isExporting || model.isLoading)
     }
 
     // MARK: sections
@@ -71,7 +72,10 @@ struct ControlsPanel: View {
                         .font(.system(size: 12, weight: .semibold, design: .monospaced))
                         .foregroundStyle(Theme.textPrimary)
                 }
-                SpeedSlider(speed: $model.settings.speed)
+                SpeedSlider(speed: $model.settings.speed,
+                            onEditingChanged: { editing in
+                                if editing { model.beginSettingsAdjustment() } else { model.endSettingsAdjustment() }
+                            })
                     .onChange(of: model.settings.speed) { _, newValue in
                         if model.isPlaying { model.player?.rate = Float(newValue) }
                     }
@@ -128,7 +132,7 @@ struct ControlsPanel: View {
             summaryRow("Dimensions", icon: "aspect-ratio",
                        "\(model.outputPixelSize.width) × \(model.outputPixelSize.height)")
             summaryRow("Duration", icon: "timer", String(format: "%.2fs", model.outputDuration))
-            if let result = model.previewResult, model.previewMode == .output, !model.isGeneratingPreview {
+            if let result = model.previewResult, model.previewIsCurrent {
                 summaryRow("Frames", icon: "film", "\(result.frames)")
                 summaryRow("File size", icon: "hard-drive", formatBytes(result.bytes))
             } else {
@@ -181,6 +185,9 @@ struct ControlsPanel: View {
                 .font(.system(size: 10))
                 .foregroundStyle(Theme.textTertiary)
                 .fixedSize(horizontal: false, vertical: true)
+            Button("Check output") { model.inspectOutput() }
+                .buttonStyle(SubtleButtonStyle())
+                .help("Encode once to inspect compression quality and exact file size. Export reuses this result.")
         }
         .padding(16)
         .panel()
@@ -269,6 +276,8 @@ struct ControlsPanel: View {
 /// implementation — the stock Slider loses drags to window-move on macOS 26.
 struct SpeedSlider: View {
     @Binding var speed: Double
+    var onEditingChanged: (Bool) -> Void = { _ in }
+    @State private var isDragging = false
 
     var body: some View {
         GeometryReader { geo in
@@ -293,13 +302,16 @@ struct SpeedSlider: View {
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { v in
+                        if !isDragging { isDragging = true; onEditingChanged(true) }
                         let f = min(max(0, v.location.x / w), 1)
                         var s = pow(2, f * 4 - 2)
                         if abs(s - 1) < 0.08 { s = 1 } // snap to 1×
                         speed = (s * 100).rounded() / 100
                     }
+                    .onEnded { _ in isDragging = false; onEditingChanged(false) }
             )
         }
         .frame(height: 18)
+        .onDisappear { if isDragging { onEditingChanged(false) } }
     }
 }

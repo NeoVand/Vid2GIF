@@ -48,6 +48,7 @@ struct ContentView: View {
             Text(model.exportError ?? "")
         }
         .onAppear(perform: installKeyMonitor)
+        .sheet(isPresented: $model.isInspectingOutput) { EncodedOutputInspector() }
         .preferredColorScheme(.dark)
     }
 
@@ -117,7 +118,7 @@ struct ContentView: View {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .fill(.black)
 
-            if model.previewMode == .output {
+            if model.previewMode == .output, model.settings.format == .gif {
                 outputPreview
             } else {
                 sourcePreview
@@ -150,13 +151,23 @@ struct ContentView: View {
         }
         .contentShape(Rectangle())
         .onTapGesture { model.togglePlayback() }
+        .overlay(alignment: .bottomTrailing) {
+            if model.isLiveVideoPreview {
+                Text("Live preview")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(Theme.textSecondary)
+                    .padding(8)
+                    .background(Capsule().fill(.black.opacity(0.6)))
+                    .padding(12)
+            }
+        }
     }
 
     /// The real output: an actual encoded file in the selected format.
     private var outputPreview: some View {
         ZStack {
             if let url = model.previewURL {
-                ExportPreviewView(url: url, format: model.settings.format)
+                AnimatedGIFView(url: url)
                     .padding(10)
                     .id(url) // force refresh when a new preview lands
             } else if let error = model.previewError {
@@ -188,8 +199,13 @@ struct ContentView: View {
                     if model.isGeneratingPreview {
                         ProgressView().controlSize(.mini)
                     }
-                    Text(formatBytes(result.bytes))
+                    Text(model.previewIsCurrent ? formatBytes(result.bytes) : (model.previewError == nil ? "Updating…" : "Update failed"))
                         .font(.system(size: 12, weight: .bold, design: .monospaced))
+                        .help(model.previewError ?? "Exact GIF preview")
+                    if model.previewError != nil {
+                        Button("Retry") { model.schedulePreviewRefresh(immediate: true) }
+                            .buttonStyle(SubtleButtonStyle())
+                    }
                     Text("\(result.size.width)×\(result.size.height) · \(result.frames)f")
                         .font(.system(size: 10, design: .monospaced))
                         .foregroundStyle(Theme.textSecondary)
@@ -206,7 +222,7 @@ struct ContentView: View {
     private var previewModeToggle: some View {
         HStack(spacing: 2) {
             modeButton("Source", mode: .original)
-            modeButton(model.settings.format.title, mode: .output)
+            modeButton(model.settings.format == .webm ? "Preview" : "GIF", mode: .output)
         }
         .padding(2)
         .background(
@@ -259,7 +275,7 @@ struct ContentView: View {
                responder is NSTextView || responder is NSTextField {
                 return event
             }
-            guard model.hasVideo, !model.isExporting else { return event }
+            guard model.hasVideo, !model.isExporting, !model.isInspectingOutput else { return event }
 
             switch event.keyCode {
             case 49: // space

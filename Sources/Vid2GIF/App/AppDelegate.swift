@@ -43,6 +43,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 
+    func applicationWillTerminate(_ notification: Notification) {
+        model.cancelExport()
+        model.unload()
+    }
+
     func application(_ application: NSApplication, open urls: [URL]) {
         if let url = urls.first { model.load(url: url) }
     }

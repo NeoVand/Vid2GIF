@@ -45,4 +45,26 @@ final class MediaExporter {
         return ExportResult(url: outputURL, frames: result.frames, bytes: result.bytes,
                             wallTime: result.wallTime, size: result.size, format: settings.format)
     }
+
+    /// Copy a completed encode through the same atomic commit used for fresh
+    /// exports. Cancellation or a failed copy leaves the destination untouched.
+    func saveCached(_ result: ExportResult, to outputURL: URL, sourceURL: URL) throws -> ExportResult {
+        let started = Date()
+        guard sourceURL.resolvingSymlinksInPath().standardizedFileURL != outputURL.resolvingSymlinksInPath().standardizedFileURL else {
+            throw ExportError.readerFailed("Choose an output file different from the source video.")
+        }
+        let staged = outputURL.deletingLastPathComponent()
+            .appendingPathComponent(".vid2gif-\(UUID().uuidString).\(result.format.rawValue)")
+        defer { try? FileManager.default.removeItem(at: staged) }
+        if cancelled.withLock({ $0 }) { throw ExportError.cancelled }
+        try FileManager.default.copyItem(at: result.url, to: staged)
+        try cancelled.withLock { isCancelled in
+            if isCancelled { throw ExportError.cancelled }
+            guard rename(staged.path, outputURL.path) == 0 else {
+                throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+            }
+        }
+        return ExportResult(url: outputURL, frames: result.frames, bytes: result.bytes,
+                            wallTime: Date().timeIntervalSince(started), size: result.size, format: result.format)
+    }
 }

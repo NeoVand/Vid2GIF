@@ -31,11 +31,11 @@ final class AppModel: ObservableObject {
         didSet { schedulePreviewRefresh() }
     }
 
-    // Live output preview renders the selected format.
+    // GIF previews encode automatically; WebM editing uses the native player.
     enum PreviewMode { case original, output }
     @Published var previewMode: PreviewMode = .original {
         didSet {
-            if previewMode == .output {
+            if previewMode == .output, settings.format == .gif {
                 player?.pause()
                 isPlaying = false
             }
@@ -45,6 +45,13 @@ final class AppModel: ObservableObject {
     @Published var previewURL: URL?
     @Published var previewResult: ExportResult?
     @Published var previewError: String?
+    @Published var previewIsCurrent = false
+    @Published var isInspectingOutput = false
+    @Published var previewProgress: Double = 0
+    @Published var isPreviewMuted = true { didSet { updateNativePreview() } }
+    private let cache = ExportCache()
+    private var previewRequest: ExportRequest?
+    private var isAdjustingSettings = false
     @Published var isGeneratingPreview = false
     private var previewGeneration = 0
     private var previewTask: Task<Void, Never>?
@@ -61,6 +68,26 @@ final class AppModel: ObservableObject {
     private var exporter: MediaExporter?
     private var thumbnailTask: Task<Void, Never>?
     private var loadTask: Task<Void, Never>?
+    private var nativePreviewTask: Task<Void, Never>?
+    private var nativeAsset: AVAsset?
+    private var nativeTrack: AVAssetTrack?
+    private var naturalSize: CGSize = .zero
+    private var sourceTransform: CGAffineTransform = .identity
+    private var nativeCompositionKey: [Double]?
+    private var exportCancellationRequested = false
+
+    var isLiveVideoPreview: Bool { settings.format == .webm && previewMode == .output }
+
+    var exportSettings: ExportSettings {
+        var value = settings
+        value.startTime = trimStart
+        value.endTime = trimEnd
+        return value
+    }
+
+    private var currentRequest: ExportRequest? {
+        videoURL.map { ExportRequest(source: $0, settings: exportSettings) }
+    }
 
     var hasVideo: Bool { videoURL != nil }
 
@@ -114,6 +141,10 @@ final class AppModel: ObservableObject {
 
                 guard !Task.isCancelled else { return }
                 let rect = CGRect(origin: .zero, size: naturalSize).applying(transform)
+                self.nativeAsset = asset
+                self.nativeTrack = track
+                self.naturalSize = naturalSize
+                self.sourceTransform = transform
                 self.sourceSize = CGSize(width: abs(rect.width), height: abs(rect.height))
                 self.duration = duration
                 self.sourceFPS = Double(fps)
@@ -150,6 +181,10 @@ final class AppModel: ObservableObject {
         if let obs = timeObserver, let player { player.removeTimeObserver(obs) }
         timeObserver = nil
         loadTask?.cancel()
+        nativePreviewTask?.cancel()
+        nativeAsset = nil
+        nativeTrack = nil
+        nativeCompositionKey = nil
         thumbnailTask?.cancel()
         previewGeneration += 1
         previewTask?.cancel()
@@ -164,6 +199,9 @@ final class AppModel: ObservableObject {
         duration = 0
         currentTime = 0
         clearPreview()
+        cache.clear()
+        isInspectingOutput = false
+        isAdjustingSettings = false
         isGeneratingPreview = false
         previewMode = .original
     }
@@ -210,7 +248,7 @@ final class AppModel: ObservableObject {
 
     func togglePlayback() {
         guard let player else { return }
-        if previewMode == .output {
+        if previewMode == .output, settings.format == .gif {
             // Playback controls operate on the source video.
             previewMode = .original
         }
@@ -237,17 +275,17 @@ final class AppModel: ObservableObject {
         )
     }
 
-    /// Scrubbing from the timeline always inspects the source video.
+    /// GIF scrubbing returns to the source; WebM keeps the live editing preview.
     func scrub(to seconds: Double) {
-        if previewMode == .output { previewMode = .original }
+        if previewMode == .output, settings.format == .gif { previewMode = .original }
         seek(to: seconds)
     }
 
     func stepFrame(_ direction: Int) {
-        if previewMode == .output { previewMode = .original }
+        if previewMode == .output, settings.format == .gif { previewMode = .original }
         player?.pause()
         isPlaying = false
-        let frameDur = sourceFPS > 0 ? 1.0 / sourceFPS : 1.0 / 30.0
+        let frameDur = isLiveVideoPreview ? settings.speed / settings.fps : (sourceFPS > 0 ? 1.0 / sourceFPS : 1.0 / 30.0)
         seek(to: currentTime + frameDur * Double(direction))
     }
 
@@ -259,70 +297,139 @@ final class AppModel: ObservableObject {
         trimEnd = max(currentTime, trimStart + 0.05)
     }
 
-    // MARK: - Live output preview
+    // MARK: - Native editing and encoded previews
 
-    /// Debounced regeneration of the real-output preview.
-    func schedulePreviewRefresh(immediate: Bool = false) {
+    private func updateNativePreview() {
+        guard let player else { return }
+        if previewMode == .output, settings.format == .gif {
+            player.pause()
+            isPlaying = false
+        }
+        player.isMuted = isPreviewMuted || !settings.includeAudio || settings.format == .gif
+        if isPlaying { player.rate = Float(settings.speed) }
+        guard isLiveVideoPreview, let asset = nativeAsset, let track = nativeTrack else {
+            nativePreviewTask?.cancel()
+            nativeCompositionKey = nil
+            player.currentItem?.videoComposition = nil
+            return
+        }
+        let key = [Double(settings.outputWidth), settings.fps, settings.speed]
+        guard nativeCompositionKey != key else { return }
+        nativeCompositionKey = key
+        nativePreviewTask?.cancel()
+        let s = settings
+        nativePreviewTask = Task { [weak self] in
+            // Coalesce rapid slider events without decoding or encoding a file.
+            try? await Task.sleep(for: .milliseconds(80))
+            guard !Task.isCancelled, let self else { return }
+            player.currentItem?.videoComposition = FrameSource.composition(
+                asset: asset, track: track, naturalSize: naturalSize, transform: sourceTransform,
+                duration: CMTime(seconds: duration, preferredTimescale: 600), settings: s)
+        }
+    }
+
+    func beginSettingsAdjustment() {
+        guard !isAdjustingSettings else { return }
+        isAdjustingSettings = true
         previewGeneration += 1
-        let gen = previewGeneration
         previewTask?.cancel()
         previewExporter?.cancel()
-        clearPreview()
         isGeneratingPreview = false
-        guard previewMode == .output, hasVideo, !isLoading, !isExporting else { return }
+    }
+
+    func endSettingsAdjustment() {
+        isAdjustingSettings = false
+        schedulePreviewRefresh()
+    }
+
+    func inspectOutput() {
+        guard settings.format == .webm, !isLoading, !isExporting else { return }
+        player?.pause()
+        isPlaying = false
+        isInspectingOutput = true
+        schedulePreviewRefresh(immediate: true)
+    }
+
+    /// Keep the previous GIF visible during updates. WebM is only encoded when
+    /// explicitly inspected or exported, never as a side effect of editing.
+    func schedulePreviewRefresh(immediate: Bool = false) {
+        updateNativePreview()
+        guard !isExporting else { return }
+        previewGeneration += 1
+        let generation = previewGeneration
+        previewTask?.cancel()
+        previewExporter?.cancel()
+        previewError = nil
+        previewIsCurrent = false
+        isGeneratingPreview = false
+        if previewResult?.format != settings.format { clearPreview() }
+        guard hasVideo, !isLoading, let request = currentRequest else { return }
+        if let result = cache.result(for: request) {
+            installPreview(result, request: request)
+            return
+        }
+        guard !isAdjustingSettings,
+              (settings.format == .gif && previewMode == .output) || isInspectingOutput else { return }
         isGeneratingPreview = true
+        previewProgress = 0
+        previewRequest = request
         previewTask = Task { [weak self] in
-            if !immediate {
-                try? await Task.sleep(for: .milliseconds(350))
-            }
+            if !immediate { try? await Task.sleep(for: .milliseconds(350)) }
             guard !Task.isCancelled else { return }
-            await self?.generatePreview(generation: gen)
+            await self?.generatePreview(request: request, generation: generation)
         }
     }
 
     private func clearPreview() {
-        if let previewURL { try? FileManager.default.removeItem(at: previewURL) }
         previewURL = nil
         previewResult = nil
+        previewRequest = nil
         previewError = nil
+        previewIsCurrent = false
     }
 
-    private func generatePreview(generation: Int) async {
-        guard let videoURL else { return }
-        isGeneratingPreview = true
+    private func installPreview(_ result: ExportResult, request: ExportRequest) {
+        previewURL = result.url
+        previewResult = result
+        previewRequest = request
+        previewIsCurrent = true
+        isGeneratingPreview = false
+        previewProgress = 1
+    }
 
-        var s = settings
-        s.startTime = trimStart
-        s.endTime = trimEnd
-
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("Vid2GIF-preview", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let outURL = dir.appendingPathComponent("preview-\(UUID().uuidString).\(s.format.rawValue)")
-
-        let exporter = MediaExporter()
-        previewExporter = exporter
+    private func generatePreview(request: ExportRequest, generation: Int) async {
+        var output: URL?
         do {
-            let result = try await Task.detached(priority: .userInitiated) {
-                try await exporter.export(assetURL: videoURL, to: outURL, settings: s) { _, _ in }
-            }.value
-            if generation == previewGeneration {
-                let old = previewURL
-                previewURL = outURL
-                previewResult = result
-                isGeneratingPreview = false
-                if let old, old != outURL {
-                    try? FileManager.default.removeItem(at: old)
+            let url = try cache.makeURL(format: request.settings.format)
+            output = url
+            let exporter = MediaExporter()
+            previewExporter = exporter
+            let result = try await Task.detached(priority: .userInitiated) { [weak self] in
+                try await exporter.export(assetURL: request.source, to: url, settings: request.settings) { p, message in
+                    Task { @MainActor [weak self] in
+                        guard let self, generation == previewGeneration else { return }
+                        previewProgress = p
+                        if isExporting { exportProgress = p * 0.95; exportMessage = message }
+                    }
                 }
-            } else {
-                try? FileManager.default.removeItem(at: outURL)
+            }.value
+            guard generation == previewGeneration else {
+                try? FileManager.default.removeItem(at: url)
+                return
             }
+            guard request == currentRequest else {
+                throw ExportError.readerFailed("The source video changed. Try previewing again.")
+            }
+            cache.store(result, for: request)
+            installPreview(result, request: request)
+            previewExporter = nil
         } catch {
             if generation == previewGeneration {
                 isGeneratingPreview = false
+                previewExporter = nil
                 if case ExportError.cancelled = error {} else { previewError = error.localizedDescription }
             }
-            try? FileManager.default.removeItem(at: outURL)
+            if let output { try? FileManager.default.removeItem(at: output) }
         }
     }
 
@@ -330,67 +437,88 @@ final class AppModel: ObservableObject {
 
     func startExport() {
         guard let videoURL, !isExporting, !isLoading else { return }
-        if settings.format == .webm, WebMExporter.executableURL == nil {
-            exportError = ExportError.encoderUnavailable.localizedDescription
-            return
-        }
-
         let panel = NSSavePanel()
         panel.allowedContentTypes = [settings.format.contentType]
         panel.nameFieldStringValue = videoURL.deletingPathExtension().lastPathComponent + "." + settings.format.rawValue
         panel.directoryURL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
-        guard panel.runModal() == .OK, let outURL = panel.url else { return }
+        guard panel.runModal() == .OK, let output = panel.url else { return }
+        Task { await export(to: output) }
+    }
 
+    /// Reuse a completed encode, or join a matching preview already in progress.
+    /// Both paths save atomically and never encode the same settings twice.
+    func export(to output: URL) async {
+        guard let request = currentRequest, !isExporting, !isLoading else { return }
         player?.pause()
         isPlaying = false
-        previewGeneration += 1
-        previewTask?.cancel()
-        previewExporter?.cancel()
-        isGeneratingPreview = false
         isExporting = true
+        exportCancellationRequested = false
         exportProgress = 0
-        exportMessage = "Starting…"
+        exportMessage = "Preparing export…"
         exportResult = nil
         exportError = nil
-
-        var s = settings
-        s.startTime = trimStart
-        s.endTime = trimEnd
-
-        let exporter = MediaExporter()
-        self.exporter = exporter
-
-        Task.detached(priority: .userInitiated) { [s] in
-            do {
-                let result = try await exporter.export(assetURL: videoURL, to: outURL, settings: s) { p, msg in
-                    Task { @MainActor [weak self] in
-                        self?.exportProgress = p
-                        self?.exportMessage = msg
-                    }
-                }
-                await MainActor.run { [weak self] in
-                    self?.isExporting = false
-                    self?.exportResult = result
-                    self?.exporter = nil
-                    if self?.previewResult == nil { self?.schedulePreviewRefresh() }
-                }
-            } catch {
-                await MainActor.run { [weak self] in
-                    self?.isExporting = false
-                    self?.exporter = nil
-                    if self?.previewResult == nil { self?.schedulePreviewRefresh() }
-                    if case ExportError.cancelled = error {
-                        self?.exportError = nil
-                    } else {
-                        self?.exportError = error.localizedDescription
-                    }
-                }
+        let started = Date()
+        defer { isExporting = false; exporter = nil }
+        do {
+            if isGeneratingPreview, previewRequest == request, let previewTask {
+                exporter = previewExporter
+                await previewTask.value
+            } else {
+                previewGeneration += 1
+                previewTask?.cancel()
+                previewExporter?.cancel()
+                isGeneratingPreview = false
             }
+            if exportCancellationRequested { throw ExportError.cancelled }
+            guard request == currentRequest else {
+                throw ExportError.readerFailed("The source video changed. Try exporting again.")
+            }
+            let encoder = MediaExporter()
+            exporter = encoder
+            let encoded: ExportResult
+            if let cached = cache.result(for: request) {
+                encoded = cached
+            } else {
+                let url = try cache.makeURL(format: request.settings.format)
+                do {
+                    encoded = try await Task.detached(priority: .userInitiated) { [weak self] in
+                        try await encoder.export(assetURL: request.source, to: url, settings: request.settings) { p, message in
+                            Task { @MainActor [weak self] in
+                                self?.exportProgress = p * 0.95
+                                self?.exportMessage = message
+                            }
+                        }
+                    }.value
+                    guard request == currentRequest else {
+                        throw ExportError.readerFailed("The source video changed. Try exporting again.")
+                    }
+                } catch {
+                    try? FileManager.default.removeItem(at: url)
+                    throw error
+                }
+                cache.store(encoded, for: request)
+            }
+            if exportCancellationRequested { throw ExportError.cancelled }
+            installPreview(encoded, request: request)
+            exportMessage = "Saving…"
+            let saved = try await Task.detached(priority: .userInitiated) {
+                try encoder.saveCached(encoded, to: output, sourceURL: request.source)
+            }.value
+            exportResult = ExportResult(url: saved.url, frames: saved.frames, bytes: saved.bytes,
+                                        wallTime: Date().timeIntervalSince(started), size: saved.size, format: saved.format)
+            exportProgress = 1
+        } catch {
+            if case ExportError.cancelled = error {} else { exportError = error.localizedDescription }
         }
     }
 
     func cancelExport() {
+        exportCancellationRequested = true
         exporter?.cancel()
+        previewTask?.cancel()
+        previewExporter?.cancel()
+        previewGeneration += 1
+        isGeneratingPreview = false
     }
 }
 

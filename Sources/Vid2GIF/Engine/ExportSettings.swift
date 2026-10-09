@@ -31,7 +31,7 @@ enum VideoQuality: String, CaseIterable {
     }
 }
 
-struct ExportSettings {
+struct ExportSettings: Equatable {
     var format: ExportFormat = .gif
     var videoQuality: VideoQuality = .balanced
     var includeAudio: Bool = true

@@ -1,7 +1,110 @@
 import XCTest
+import AVFoundation
 @testable import Vid2GIF
 
 final class ExportTests: XCTestCase {
+    @MainActor
+    func testCacheInvalidatesChangedSettingsAndSource() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = directory.appendingPathComponent("source.mov")
+        try Data("original source".utf8).write(to: source)
+        let cache = ExportCache()
+        var settings = ExportSettings()
+        settings.format = .webm
+        let request = ExportRequest(source: source, settings: settings)
+        let cachedURL = try cache.makeURL(format: .webm)
+        let bytes = Data("an encoded video".utf8)
+        try bytes.write(to: cachedURL)
+        let encoded = ExportResult(url: cachedURL, frames: 24, bytes: bytes.count, wallTime: 1, size: (160, 120), format: .webm)
+        cache.store(encoded, for: request)
+        XCTAssertEqual(cache.result(for: request)?.url, cachedURL)
+        settings.dither = .none // GIF-only settings do not invalidate WebM.
+        XCTAssertNotNil(cache.result(for: ExportRequest(source: source, settings: settings)))
+        settings.videoQuality = .high
+        XCTAssertNil(cache.result(for: ExportRequest(source: source, settings: settings)))
+        try Data("a replacement source file".utf8).write(to: source)
+        XCTAssertNotEqual(ExportRequest(source: source, settings: request.settings), request)
+
+        let destination = directory.appendingPathComponent("saved.webm")
+        try Data("old destination".utf8).write(to: destination)
+        let saved = try MediaExporter().saveCached(encoded, to: destination, sourceURL: source)
+        XCTAssertEqual(try Data(contentsOf: saved.url), bytes)
+        XCTAssertEqual(saved.frames, encoded.frames)
+        let cancelled = MediaExporter()
+        cancelled.cancel()
+        XCTAssertThrowsError(try cancelled.saveCached(encoded, to: destination, sourceURL: source))
+        XCTAssertEqual(try Data(contentsOf: destination), bytes)
+        XCTAssertThrowsError(try MediaExporter().saveCached(encoded, to: source, sourceURL: source))
+        cache.clear()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: cachedURL.path))
+    }
+
+    @MainActor
+    func testNativeEditingDoesNotEncodeAndExportReusesInspection() async throws {
+        guard let ffmpeg = WebMExporter.executableURL else { throw XCTSkip("FFmpeg is not installed") }
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = directory.appendingPathComponent("source.mp4")
+        _ = try run(ffmpeg, ["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=320x240:rate=30:duration=3", "-c:v", "libx264", source.path])
+        let model = AppModel()
+        defer { model.unload() }
+        model.settings.format = .webm
+        model.load(url: source)
+        let deadline = Date().addingTimeInterval(5)
+        while model.isLoading, Date() < deadline { try await Task.sleep(for: .milliseconds(20)) }
+        XCTAssertNil(model.loadError)
+        XCTAssertNotNil(model.player)
+        model.beginSettingsAdjustment()
+        model.settings.outputWidth = 160
+        model.settings.speed = 2
+        model.settings.fps = 12
+        model.trimEnd = 2
+        model.endSettingsAdjustment()
+        try await Task.sleep(for: .milliseconds(450))
+        XCTAssertFalse(model.isGeneratingPreview)
+        XCTAssertNil(model.previewURL)
+        XCTAssertEqual(model.player?.currentItem?.videoComposition?.renderSize, CGSize(width: 160, height: 120))
+        XCTAssertEqual(try XCTUnwrap(model.player?.currentItem?.videoComposition?.frameDuration.seconds), 1.0 / 6, accuracy: 0.001)
+
+        // Export joins the explicit inspection, even if it hasn't launched yet.
+        model.inspectOutput()
+        await model.export(to: directory.appendingPathComponent("first.webm"))
+        XCTAssertNil(model.exportError)
+        let first = try XCTUnwrap(model.exportResult)
+        let cachedURL = try XCTUnwrap(model.previewURL)
+        model.isInspectingOutput = false
+        await model.export(to: directory.appendingPathComponent("second.webm"))
+        XCTAssertNil(model.exportError)
+        XCTAssertEqual(model.previewURL, cachedURL)
+        XCTAssertEqual(try Data(contentsOf: first.url), try Data(contentsOf: XCTUnwrap(model.exportResult).url))
+
+        model.settings.videoQuality = .compact
+        XCTAssertFalse(model.previewIsCurrent)
+        XCTAssertFalse(model.isGeneratingPreview)
+        XCTAssertEqual(model.previewURL, cachedURL) // Retain the prior output until its replacement is ready.
+        await model.export(to: directory.appendingPathComponent("changed.webm"))
+        XCTAssertNil(model.exportError)
+        XCTAssertNotEqual(model.previewURL, cachedURL)
+
+        model.settings.format = .gif
+        let gifDeadline = Date().addingTimeInterval(5)
+        while model.isGeneratingPreview, Date() < gifDeadline { try await Task.sleep(for: .milliseconds(20)) }
+        let gifPreview = try XCTUnwrap(model.previewURL)
+        XCTAssertEqual(model.previewResult?.format, .gif)
+        model.beginSettingsAdjustment()
+        model.settings.fps = 24
+        try await Task.sleep(for: .milliseconds(450))
+        XCTAssertFalse(model.isGeneratingPreview) // Even a paused drag must not start an encode.
+        XCTAssertEqual(model.previewURL, gifPreview)
+        XCTAssertFalse(model.previewIsCurrent)
+        model.endSettingsAdjustment()
+        let refreshDeadline = Date().addingTimeInterval(5)
+        while model.isGeneratingPreview, Date() < refreshDeadline { try await Task.sleep(for: .milliseconds(20)) }
+        XCTAssertNotEqual(model.previewURL, gifPreview)
+        XCTAssertTrue(model.previewIsCurrent)
+    }
+
     func testCLISelectsFormatAndVideoSettings() throws {
         let (_, output, settings) = try CLI.parse([
             "input with spaces.mov", "output.WEBM", "--width", "480", "--fps", "24",
@@ -130,6 +233,14 @@ final class ExportTests: XCTestCase {
         let silentResult = try await MediaExporter().export(assetURL: silent, to: dir.appendingPathComponent("silent.webm"), settings: settings) { _, _ in }
         XCTAssertEqual(silentResult.frames, 6)
         XCTAssertFalse(try inspect(probe, silentResult.url).streams.contains { $0.codec_type == "audio" })
+
+        let rotated = dir.appendingPathComponent("rotated.mov")
+        _ = try run(ffmpeg, ["-v", "error", "-y", "-display_rotation", "90", "-i", input.path, "-c", "copy", rotated.path])
+        settings.speed = 1
+        let portrait = try await MediaExporter().export(assetURL: rotated, to: dir.appendingPathComponent("portrait.webm"), settings: settings) { _, _ in }
+        let portraitVideo = try XCTUnwrap(inspect(probe, portrait.url).streams.first { $0.codec_type == "video" })
+        XCTAssertEqual(portraitVideo.width, 160)
+        XCTAssertEqual(portraitVideo.height, 212)
 
         // Existing GIF path remains functional through the shared exporter.
         settings.format = .gif

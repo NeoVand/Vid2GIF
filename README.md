@@ -12,12 +12,16 @@ A fast, native macOS video → GIF and WebM converter. GIF encoding is pure Swif
 - **GPU scale + resample**: `AVAssetReaderVideoCompositionOutput` scales to the output size and resamples to the target frame rate in one GPU-composited pass.
 - **Custom GIF89a encoder**: median-cut global palette, 15-bit nearest-color lookup table, hand-rolled LZW — no ImageIO, no ffmpeg.
 - **Inter-frame delta encoding**: only changed pixels are stored (with a changed-region bounding box + transparency). Screen recordings shrink ~7×.
+- **WebM native frame pipeline**: AVFoundation decodes and Core Image performs GPU Lanczos scaling. A bounded NV12 stream feeds the VP9 encoder, avoiding a second video decode in FFmpeg.
+- **Reusable exports**: completed GIF and WebM encodes are cached by source-file identity and settings. Saving a matching preview copies it atomically; an export can also join an inspection already in progress.
 
 Measured on an Apple Silicon Mac: a 36-second 2182×1464 screen recording converts to a 640px 15fps GIF (536 frames) in **2.9 seconds** — ~12× realtime.
 
 ## The live preview
 
-The preview pane shows the *actual encoded output* and regenerates automatically (debounced) whenever you touch a setting or trim handle, with the exact output file size in the corner. GIF previews use the real palette, dithering, and timing. WebM previews play the encoded video through WebKit, with controls for seeking and audio (muted initially).
+GIF previews show the *actual encoded output*, with its real palette, dithering, timing, and exact size. The previous preview stays visible while a replacement is generated. Encoding waits until you release a speed slider or trim handle, then debounces further changes.
+
+WebM editing uses the original native `AVPlayerLayer` and transport controls. Size, frame rate, speed, trim, and audio changes update playback without encoding a file. This live preview shows the edits; it does not simulate compression quality. **Check output** explicitly encodes the selected clip and opens an inspector with the actual compressed video, native play/pause/seek/mute controls, and exact file size. The inspector uses WebKit for WebM decoding with its browser controls hidden. Export reuses this completed encode.
 
 ## Features
 
@@ -64,7 +68,7 @@ The same engine is scriptable:
 
 The output extension selects the format (`.gif` or `.webm`). Shared flags: `--width` `--fps` `--start` `--end` `--speed`. WebM: `--quality compact|balanced|high`, `--no-audio`. GIF: `--colors`, `--dither bayer|fs|none`, `--no-loop`, `--no-delta`.
 
-Run `swift test` for argument validation, safe cancellation/replacement, and actual encoding checks for timing, dimensions, frame rate, quality, audio, silent inputs, and GIF regression. Integration checks require FFmpeg and ffprobe and skip when unavailable.
+Run `swift test` for argument validation, cache invalidation/reuse, native editing without encoding, safe cancellation/replacement, and actual encoding checks for timing, dimensions, frame rate, quality, audio, silent/rotated inputs, and GIF regression. Integration checks require FFmpeg and ffprobe and skip when unavailable.
 
 ## Architecture
 
@@ -78,13 +82,16 @@ Sources/Vid2GIF/
 │   ├── GIFWriter.swift      # GIF89a streaming writer, delta frames, timing
 │   ├── GIFExporter.swift    # two-pass orchestration (palette pass → encode pass)
 │   ├── WebMExporter.swift   # cancellable FFmpeg VP9/Opus encoding with progress
+│   ├── ExportCache.swift    # bounded, source-aware cache of completed encodes
 │   └── MediaExporter.swift  # format routing, validation, atomic output replacement
 ├── App/                     # AppDelegate, AppModel (state, player, live preview)
 ├── UI/                      # SwiftUI: editor, timeline, controls, export views
 └── CLI.swift                # headless convert command
 ```
 
-GIF export is two passes: pass 1 samples ~24 frames via `AVAssetImageGenerator` to build a global palette; pass 2 streams every frame through quantize → LZW → disk, so memory stays flat regardless of clip length. WebM uses constant-quality VP9 encoding with CRF 42 / 32 / 22 for Compact / Balanced / High. FFmpeg handles orientation, trimming, scaling, frame-rate resampling, and audio speed adjustment.
+GIF export is two passes: pass 1 samples ~24 frames via `AVAssetImageGenerator` to build a global palette; pass 2 streams every frame through quantize → LZW → disk, so memory stays flat regardless of clip length. WebM uses constant-quality VP9 encoding with CRF 42 / 32 / 22 for Compact / Balanced / High and the realtime, CPU-used 6 preset. Faster encoding can produce larger files than the previous preset.
+
+For WebM, AVFoundation and Core Image handle orientation, trim, Rec.709 conversion, and GPU Lanczos scaling. Timestamp-based resampling holds frames when needed for slow motion. Packed NV12 frames stream to FFmpeg with pipe backpressure; FFmpeg encodes VP9 and adjusts/encodes optional audio as Opus. The native editing player uses the same video composition. GIF keeps its existing compositor and encoder.
 
 ## Credits
 
