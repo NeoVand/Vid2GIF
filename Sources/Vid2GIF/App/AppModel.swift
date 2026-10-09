@@ -31,23 +31,24 @@ final class AppModel: ObservableObject {
         didSet { schedulePreviewRefresh() }
     }
 
-    // Live GIF preview: the preview pane renders the REAL encoded GIF.
-    enum PreviewMode { case original, gif }
+    // Live output preview renders the selected format.
+    enum PreviewMode { case original, output }
     @Published var previewMode: PreviewMode = .original {
         didSet {
-            if previewMode == .gif {
+            if previewMode == .output {
                 player?.pause()
                 isPlaying = false
-                schedulePreviewRefresh(immediate: true)
             }
+            schedulePreviewRefresh(immediate: true)
         }
     }
-    @Published var previewGIFURL: URL?
+    @Published var previewURL: URL?
     @Published var previewResult: ExportResult?
+    @Published var previewError: String?
     @Published var isGeneratingPreview = false
     private var previewGeneration = 0
     private var previewTask: Task<Void, Never>?
-    private var previewExporter: GIFExporter?
+    private var previewExporter: MediaExporter?
 
     // Export state
     @Published var isExporting = false
@@ -57,8 +58,9 @@ final class AppModel: ObservableObject {
     @Published var exportError: String?
 
     private var timeObserver: Any?
-    private var exporter: GIFExporter?
+    private var exporter: MediaExporter?
     private var thumbnailTask: Task<Void, Never>?
+    private var loadTask: Task<Void, Never>?
 
     var hasVideo: Bool { videoURL != nil }
 
@@ -83,6 +85,7 @@ final class AppModel: ObservableObject {
     // MARK: - Loading
 
     func presentOpenPanel() {
+        guard !isExporting else { return }
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.movie, .mpeg4Movie, .quickTimeMovie, .avi, .video]
         panel.allowsMultipleSelection = false
@@ -92,12 +95,13 @@ final class AppModel: ObservableObject {
     }
 
     func load(url: URL) {
+        guard !isExporting else { return }
         unload()
         isLoading = true
         loadError = nil
         videoURL = url
 
-        Task {
+        loadTask = Task {
             do {
                 let asset = AVURLAsset(url: url)
                 guard let track = try await asset.loadTracks(withMediaType: .video).first else {
@@ -108,6 +112,7 @@ final class AppModel: ObservableObject {
                 let transform = try await track.load(.preferredTransform)
                 let fps = try await track.load(.nominalFrameRate)
 
+                guard !Task.isCancelled else { return }
                 let rect = CGRect(origin: .zero, size: naturalSize).applying(transform)
                 self.sourceSize = CGSize(width: abs(rect.width), height: abs(rect.height))
                 self.duration = duration
@@ -130,9 +135,10 @@ final class AppModel: ObservableObject {
                 self.installTimeObserver(on: player)
                 self.isLoading = false
                 self.generateThumbnails(asset: asset)
-                // The point of the app: show the real GIF from the start.
-                self.previewMode = .gif
+                // Show the actual output from the start.
+                self.previewMode = .output
             } catch {
+                guard !Task.isCancelled else { return }
                 self.isLoading = false
                 self.videoURL = nil
                 self.loadError = error.localizedDescription
@@ -143,7 +149,9 @@ final class AppModel: ObservableObject {
     func unload() {
         if let obs = timeObserver, let player { player.removeTimeObserver(obs) }
         timeObserver = nil
+        loadTask?.cancel()
         thumbnailTask?.cancel()
+        previewGeneration += 1
         previewTask?.cancel()
         previewExporter?.cancel()
         player?.pause()
@@ -155,8 +163,7 @@ final class AppModel: ObservableObject {
         isPlaying = false
         duration = 0
         currentTime = 0
-        previewGIFURL = nil
-        previewResult = nil
+        clearPreview()
         isGeneratingPreview = false
         previewMode = .original
     }
@@ -203,7 +210,7 @@ final class AppModel: ObservableObject {
 
     func togglePlayback() {
         guard let player else { return }
-        if previewMode == .gif {
+        if previewMode == .output {
             // Playback controls operate on the source video.
             previewMode = .original
         }
@@ -232,12 +239,12 @@ final class AppModel: ObservableObject {
 
     /// Scrubbing from the timeline always inspects the source video.
     func scrub(to seconds: Double) {
-        if previewMode == .gif { previewMode = .original }
+        if previewMode == .output { previewMode = .original }
         seek(to: seconds)
     }
 
     func stepFrame(_ direction: Int) {
-        if previewMode == .gif { previewMode = .original }
+        if previewMode == .output { previewMode = .original }
         player?.pause()
         isPlaying = false
         let frameDur = sourceFPS > 0 ? 1.0 / sourceFPS : 1.0 / 30.0
@@ -252,15 +259,18 @@ final class AppModel: ObservableObject {
         trimEnd = max(currentTime, trimStart + 0.05)
     }
 
-    // MARK: - Live GIF preview
+    // MARK: - Live output preview
 
-    /// Debounced regeneration of the real-output preview GIF.
+    /// Debounced regeneration of the real-output preview.
     func schedulePreviewRefresh(immediate: Bool = false) {
-        guard previewMode == .gif, hasVideo, !isExporting else { return }
         previewGeneration += 1
         let gen = previewGeneration
         previewTask?.cancel()
         previewExporter?.cancel()
+        clearPreview()
+        isGeneratingPreview = false
+        guard previewMode == .output, hasVideo, !isLoading, !isExporting else { return }
+        isGeneratingPreview = true
         previewTask = Task { [weak self] in
             if !immediate {
                 try? await Task.sleep(for: .milliseconds(350))
@@ -268,6 +278,13 @@ final class AppModel: ObservableObject {
             guard !Task.isCancelled else { return }
             await self?.generatePreview(generation: gen)
         }
+    }
+
+    private func clearPreview() {
+        if let previewURL { try? FileManager.default.removeItem(at: previewURL) }
+        previewURL = nil
+        previewResult = nil
+        previewError = nil
     }
 
     private func generatePreview(generation: Int) async {
@@ -281,17 +298,17 @@ final class AppModel: ObservableObject {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("Vid2GIF-preview", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let outURL = dir.appendingPathComponent("preview-\(generation).gif")
+        let outURL = dir.appendingPathComponent("preview-\(UUID().uuidString).\(s.format.rawValue)")
 
-        let exporter = GIFExporter()
+        let exporter = MediaExporter()
         previewExporter = exporter
         do {
             let result = try await Task.detached(priority: .userInitiated) {
                 try await exporter.export(assetURL: videoURL, to: outURL, settings: s) { _, _ in }
             }.value
             if generation == previewGeneration {
-                let old = previewGIFURL
-                previewGIFURL = outURL
+                let old = previewURL
+                previewURL = outURL
                 previewResult = result
                 isGeneratingPreview = false
                 if let old, old != outURL {
@@ -303,6 +320,7 @@ final class AppModel: ObservableObject {
         } catch {
             if generation == previewGeneration {
                 isGeneratingPreview = false
+                if case ExportError.cancelled = error {} else { previewError = error.localizedDescription }
             }
             try? FileManager.default.removeItem(at: outURL)
         }
@@ -311,18 +329,24 @@ final class AppModel: ObservableObject {
     // MARK: - Export
 
     func startExport() {
-        guard let videoURL, !isExporting else { return }
+        guard let videoURL, !isExporting, !isLoading else { return }
+        if settings.format == .webm, WebMExporter.executableURL == nil {
+            exportError = ExportError.encoderUnavailable.localizedDescription
+            return
+        }
 
         let panel = NSSavePanel()
-        panel.allowedContentTypes = [.gif]
-        panel.nameFieldStringValue = videoURL.deletingPathExtension().lastPathComponent + ".gif"
+        panel.allowedContentTypes = [settings.format.contentType]
+        panel.nameFieldStringValue = videoURL.deletingPathExtension().lastPathComponent + "." + settings.format.rawValue
         panel.directoryURL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
         guard panel.runModal() == .OK, let outURL = panel.url else { return }
 
         player?.pause()
         isPlaying = false
+        previewGeneration += 1
         previewTask?.cancel()
         previewExporter?.cancel()
+        isGeneratingPreview = false
         isExporting = true
         exportProgress = 0
         exportMessage = "Starting…"
@@ -333,7 +357,7 @@ final class AppModel: ObservableObject {
         s.startTime = trimStart
         s.endTime = trimEnd
 
-        let exporter = GIFExporter()
+        let exporter = MediaExporter()
         self.exporter = exporter
 
         Task.detached(priority: .userInitiated) { [s] in
@@ -347,10 +371,14 @@ final class AppModel: ObservableObject {
                 await MainActor.run { [weak self] in
                     self?.isExporting = false
                     self?.exportResult = result
+                    self?.exporter = nil
+                    if self?.previewResult == nil { self?.schedulePreviewRefresh() }
                 }
             } catch {
                 await MainActor.run { [weak self] in
                     self?.isExporting = false
+                    self?.exporter = nil
+                    if self?.previewResult == nil { self?.schedulePreviewRefresh() }
                     if case ExportError.cancelled = error {
                         self?.exportError = nil
                     } else {

@@ -9,6 +9,7 @@ let package = Package(
             name: "Vid2GIF",
             path: "Sources/Vid2GIF",
             resources: [.copy("Icons")]
-        )
+        ),
+        .testTarget(name: "Vid2GIFTests", dependencies: ["Vid2GIF"])
     ]
 )

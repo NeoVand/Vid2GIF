@@ -19,7 +19,7 @@ run: app
 
 cli:
 	swift build -c release
-	@echo "CLI ready: $(BIN) convert <input> <output.gif> [options]"
+	@echo "CLI ready: $(BIN) convert <input> <output.gif|output.webm> [options]"
 
 clean:
 	rm -rf .build build

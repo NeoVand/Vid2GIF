@@ -1,62 +1,24 @@
 import Foundation
 
-/// Headless mode: `vid2gif convert input.mov output.gif [options]`
+/// Headless mode: `vid2gif convert input.mov output.gif|output.webm [options]`
 enum CLI {
     static var shouldRun: Bool {
         CommandLine.arguments.count > 1 && CommandLine.arguments[1] == "convert"
     }
 
     static func run() -> Never {
-        var args = Array(CommandLine.arguments.dropFirst(2))
-        var positional: [String] = []
-        var settings = ExportSettings()
-
-        func popValue(_ flag: String) -> String? {
-            guard let i = args.firstIndex(of: flag), i + 1 < args.count else { return nil }
-            let v = args[i + 1]
-            args.removeSubrange(i...(i + 1))
-            return v
+        let input: URL
+        let output: URL
+        let settings: ExportSettings
+        do {
+            (input, output, settings) = try parse(Array(CommandLine.arguments.dropFirst(2)))
+        } catch {
+            fail(error.localizedDescription + "\n" + usage)
         }
-
-        if let v = popValue("--width"), let n = Int(v) { settings.outputWidth = n }
-        if let v = popValue("--fps"), let n = Double(v) { settings.fps = n }
-        if let v = popValue("--start"), let n = Double(v) { settings.startTime = n }
-        if let v = popValue("--end"), let n = Double(v) { settings.endTime = n }
-        if let v = popValue("--speed"), let n = Double(v) { settings.speed = n }
-        if let v = popValue("--colors"), let n = Int(v) { settings.maxColors = min(255, max(2, n)) }
-        if let v = popValue("--dither") {
-            switch v.lowercased() {
-            case "bayer": settings.dither = .bayer
-            case "fs", "diffusion": settings.dither = .floydSteinberg
-            case "none": settings.dither = .none
-            default: fail("unknown dither mode '\(v)' (bayer|fs|none)")
-            }
-        }
-        if let i = args.firstIndex(of: "--no-loop") { args.remove(at: i); settings.loopForever = false }
-        if let i = args.firstIndex(of: "--no-delta") { args.remove(at: i); settings.useDelta = false }
-
-        positional = args.filter { !$0.hasPrefix("--") }
-        guard positional.count == 2 else {
-            fail("""
-            usage: vid2gif convert <input> <output.gif> [options]
-              --width N       output width in px (default 640)
-              --fps N         output frame rate (default 15)
-              --start S       trim start seconds
-              --end S         trim end seconds
-              --speed X       playback speed multiplier (default 1)
-              --colors N      palette size ≤255 (default 255)
-              --dither M      bayer | fs | none (default bayer)
-              --no-loop       play once
-              --no-delta      disable inter-frame delta encoding
-            """)
-        }
-
-        let input = URL(fileURLWithPath: positional[0])
-        let output = URL(fileURLWithPath: positional[1])
 
         let semaphore = DispatchSemaphore(value: 0)
         var exitCode: Int32 = 0
-        let exporter = GIFExporter()
+        let exporter = MediaExporter()
 
         Task {
             do {
@@ -83,6 +45,87 @@ enum CLI {
         }
         semaphore.wait()
         exit(exitCode)
+    }
+
+    private static let usage = """
+    usage: vid2gif convert <input> <output.gif|output.webm> [options]
+      --width N       output width in px (default 640)
+      --fps N         output frame rate, 1–60 (default 15)
+      --start S       trim start seconds
+      --end S         trim end seconds
+      --speed X       playback speed, 0.25–4 (default 1)
+      --quality Q     WebM: compact | balanced | high (default balanced)
+      --no-audio      WebM: omit source audio
+      --colors N      GIF: palette size, 2–256 (default 256)
+      --dither M      GIF: bayer | fs | none (default bayer)
+      --no-loop       GIF: play once
+      --no-delta      GIF: disable inter-frame delta encoding
+    """
+
+    struct ArgumentError: LocalizedError {
+        let message: String
+        var errorDescription: String? { message }
+    }
+
+    static func parse(_ args: [String]) throws -> (URL, URL, ExportSettings) {
+        var settings = ExportSettings()
+        var positional: [String] = []
+        var index = 0
+        while index < args.count {
+            let flag = args[index]
+            index += 1
+            if !flag.hasPrefix("--") { positional.append(flag); continue }
+            switch flag {
+            case "--no-loop": settings.loopForever = false; continue
+            case "--no-delta": settings.useDelta = false; continue
+            case "--no-audio": settings.includeAudio = false; continue
+            default: break
+            }
+            guard ["--width", "--fps", "--start", "--end", "--speed", "--quality", "--colors", "--dither"].contains(flag) else {
+                throw ArgumentError(message: "Unknown option: \(flag)")
+            }
+            guard index < args.count else { throw ArgumentError(message: "Missing value for \(flag)") }
+            let value = args[index]
+            index += 1
+            func number() throws -> Double {
+                guard let n = Double(value), n.isFinite else { throw ArgumentError(message: "Invalid number for \(flag): \(value)") }
+                return n
+            }
+            func integer() throws -> Int {
+                guard let n = Int(value) else { throw ArgumentError(message: "Invalid integer for \(flag): \(value)") }
+                return n
+            }
+            switch flag {
+            case "--width": settings.outputWidth = try integer()
+            case "--fps": settings.fps = try number()
+            case "--start": settings.startTime = try number()
+            case "--end": settings.endTime = try number()
+            case "--speed": settings.speed = try number()
+            case "--colors": settings.maxColors = min(255, try integer())
+            case "--quality":
+                guard let quality = VideoQuality(rawValue: value.lowercased()) else {
+                    throw ArgumentError(message: "Unknown quality: \(value) (compact|balanced|high)")
+                }
+                settings.videoQuality = quality
+            case "--dither":
+                switch value.lowercased() {
+                case "bayer": settings.dither = .bayer
+                case "fs", "diffusion": settings.dither = .floydSteinberg
+                case "none": settings.dither = .none
+                default: throw ArgumentError(message: "Unknown dither mode: \(value) (bayer|fs|none)")
+                }
+            default: break
+            }
+        }
+        guard positional.count == 2 else { throw ArgumentError(message: "Specify an input video and an output file.") }
+        let input = URL(fileURLWithPath: positional[0])
+        let output = URL(fileURLWithPath: positional[1])
+        guard let format = ExportFormat(rawValue: output.pathExtension.lowercased()) else {
+            throw ArgumentError(message: "Output must have a .gif or .webm extension.")
+        }
+        settings.format = format
+        try settings.validate()
+        return (input, output, settings)
     }
 
     private static func fail(_ msg: String) -> Never {

@@ -32,6 +32,7 @@ final class GIFExporter {
         let duration = try await asset.load(.duration).seconds
         let start = max(0, settings.startTime)
         let end = min(settings.endTime, duration)
+        guard start.isFinite, end.isFinite, end > start else { throw ExportError.emptyOutput }
 
         // ---- Pass 1: sample frames → global palette --------------------------
         progress(0, "Analyzing colors…")

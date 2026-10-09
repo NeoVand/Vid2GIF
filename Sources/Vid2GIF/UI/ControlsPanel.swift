@@ -13,7 +13,11 @@ struct ControlsPanel: View {
     var body: some View {
         VStack(spacing: 14) {
             outputSection
-            qualitySection
+            if model.settings.format == .gif {
+                qualitySection
+            } else {
+                videoQualitySection
+            }
             summarySection
                 .frame(maxHeight: .infinity, alignment: .top)
             exportArea
@@ -34,8 +38,15 @@ struct ControlsPanel: View {
         VStack(spacing: 16) {
             sectionHeader("Output")
 
+            labeledRow("Format", icon: "video") {
+                SegmentedControl(
+                    options: ExportFormat.allCases.map { (label: $0.title, value: $0) },
+                    selection: $model.settings.format
+                )
+            }
+
             labeledRow("Width", icon: "ruler") {
-                Picker("", selection: $model.settings.outputWidth) {
+                Picker("Width", selection: $model.settings.outputWidth) {
                     ForEach(availableWidths, id: \.self) { w in
                         Text(w == sourceWidth ? "\(w) px (source)" : "\(w) px").tag(w)
                     }
@@ -45,7 +56,7 @@ struct ControlsPanel: View {
             }
 
             labeledRow("Frame rate", icon: "clock") {
-                Picker("", selection: $model.settings.fps) {
+                Picker("Frame rate", selection: $model.settings.fps) {
                     ForEach(availableFPS, id: \.self) { f in
                         Text("\(Int(f)) fps").tag(f)
                     }
@@ -117,13 +128,17 @@ struct ControlsPanel: View {
             summaryRow("Dimensions", icon: "aspect-ratio",
                        "\(model.outputPixelSize.width) × \(model.outputPixelSize.height)")
             summaryRow("Duration", icon: "timer", String(format: "%.2fs", model.outputDuration))
-            if let result = model.previewResult, model.previewMode == .gif, !model.isGeneratingPreview {
+            if let result = model.previewResult, model.previewMode == .output, !model.isGeneratingPreview {
                 summaryRow("Frames", icon: "film", "\(result.frames)")
                 summaryRow("File size", icon: "hard-drive", formatBytes(result.bytes))
             } else {
                 summaryRow("Frames", icon: "film",
                            "\(Int((model.outputDuration * model.settings.fps).rounded()))")
-                summaryRow("Est. size", icon: "hard-drive", "~" + formatBytes(model.estimatedBytes))
+                if model.settings.format == .gif {
+                    summaryRow("Est. size", icon: "hard-drive", "~" + formatBytes(model.estimatedBytes))
+                } else {
+                    summaryRow("File size", icon: "hard-drive", "After encoding")
+                }
             }
         }
         .padding(16)
@@ -137,14 +152,38 @@ struct ControlsPanel: View {
         } label: {
             HStack(spacing: 8) {
                 HugeIcon(name: "sparkles", size: 15)
-                Text("Export GIF")
+                Text("Export \(model.settings.format.title)")
             }
             .frame(maxWidth: .infinity)
         }
-        .buttonStyle(GradientButtonStyle(disabled: model.isExporting || !model.hasVideo, height: 52))
-        .disabled(model.isExporting || !model.hasVideo)
+        .buttonStyle(GradientButtonStyle(disabled: model.isExporting || !model.hasVideo || model.isLoading, height: 52))
+        .disabled(model.isExporting || !model.hasVideo || model.isLoading)
         .keyboardShortcut("e", modifiers: .command)
-        .help("Export GIF (⌘E)")
+        .help("Export \(model.settings.format.title) (⌘E)")
+    }
+
+    private var videoQualitySection: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            sectionHeader("Quality")
+            SegmentedControl(
+                options: VideoQuality.allCases.map { (label: $0.title, value: $0) },
+                selection: $model.settings.videoQuality,
+                fillWidth: true
+            )
+            Text(model.settings.videoQuality.help)
+                .font(.system(size: 10))
+                .foregroundStyle(Theme.textTertiary)
+                .fixedSize(horizontal: false, vertical: true)
+            toggleRow(icon: "video", title: "Include audio",
+                      detail: "Keep source audio, matched to playback speed",
+                      isOn: $model.settings.includeAudio)
+            Text("WebM keeps full color. Looping is controlled by the app or website playing your video.")
+                .font(.system(size: 10))
+                .foregroundStyle(Theme.textTertiary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(16)
+        .panel()
     }
 
     // MARK: helpers

@@ -105,6 +105,7 @@ struct ContentView: View {
             previewModeToggle
 
             Button("Open…") { model.presentOpenPanel() }
+                .disabled(model.isExporting)
                 .buttonStyle(SubtleButtonStyle())
                 .keyboardShortcut("o", modifiers: .command)
         }
@@ -116,8 +117,8 @@ struct ContentView: View {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .fill(.black)
 
-            if model.previewMode == .gif {
-                gifPreview
+            if model.previewMode == .output {
+                outputPreview
             } else {
                 sourcePreview
             }
@@ -151,18 +152,30 @@ struct ContentView: View {
         .onTapGesture { model.togglePlayback() }
     }
 
-    /// The real output: an actual encoded GIF, looping exactly as exported.
-    private var gifPreview: some View {
+    /// The real output: an actual encoded file in the selected format.
+    private var outputPreview: some View {
         ZStack {
-            if let url = model.previewGIFURL {
-                AnimatedGIFView(url: url)
+            if let url = model.previewURL {
+                ExportPreviewView(url: url, format: model.settings.format)
                     .padding(10)
                     .id(url) // force refresh when a new preview lands
+            } else if let error = model.previewError {
+                VStack(spacing: 12) {
+                    Text("Preview unavailable")
+                        .font(.system(size: 14, weight: .semibold))
+                    Text(error)
+                        .font(.system(size: 12))
+                        .multilineTextAlignment(.center)
+                        .foregroundStyle(Theme.textSecondary)
+                    Button("Retry") { model.schedulePreviewRefresh(immediate: true) }
+                        .buttonStyle(SubtleButtonStyle())
+                }
+                .padding(30)
             } else {
                 VStack(spacing: 10) {
                     ProgressView()
                         .controlSize(.small)
-                    Text("Rendering GIF preview…")
+                    Text("Rendering \(model.settings.format.title) preview…")
                         .font(.system(size: 11))
                         .foregroundStyle(Theme.textSecondary)
                 }
@@ -193,7 +206,7 @@ struct ContentView: View {
     private var previewModeToggle: some View {
         HStack(spacing: 2) {
             modeButton("Source", mode: .original)
-            modeButton("GIF", mode: .gif)
+            modeButton(model.settings.format.title, mode: .output)
         }
         .padding(2)
         .background(
@@ -223,7 +236,7 @@ struct ContentView: View {
     // MARK: input
 
     private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
-        guard let provider = providers.first else { return false }
+        guard !model.isExporting, let provider = providers.first else { return false }
         _ = provider.loadObject(ofClass: URL.self) { url, _ in
             guard let url else { return }
             let videoExts = ["mov", "mp4", "m4v", "avi", "webm", "mkv", "mpg", "mpeg", "gif"]
@@ -296,7 +309,7 @@ struct AboutView: View {
                     .foregroundStyle(Theme.textTertiary)
             }
 
-            Text("Blazingly fast, hardware-accelerated\nvideo → GIF conversion for macOS.")
+            Text("Blazingly fast, hardware-accelerated\nvideo → GIF and WebM conversion for macOS.")
                 .font(.system(size: 12))
                 .foregroundStyle(Theme.textSecondary)
                 .multilineTextAlignment(.center)
@@ -348,7 +361,7 @@ struct EmptyStateView: View {
                 Text("Drop a video to begin")
                     .font(.system(size: 22, weight: .bold))
                     .foregroundStyle(Theme.textPrimary)
-                Text("Trim, tune, and convert to a beautifully compressed GIF.\nHardware-accelerated — even long clips convert in seconds.")
+                Text("Trim, tune, and export as GIF or WebM video.\nSet the size, frame rate, speed, and quality in one place.")
                     .font(.system(size: 13))
                     .foregroundStyle(Theme.textSecondary)
                     .multilineTextAlignment(.center)
@@ -438,7 +451,7 @@ struct ExportResultCard: View {
                 HStack(spacing: 6) {
                     HugeIcon(name: "checkmark-circle", size: 15)
                         .foregroundStyle(Theme.accent)
-                    Text("GIF Exported")
+                    Text("\(result.format.title) Exported")
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(Theme.textPrimary)
                 }
@@ -454,12 +467,12 @@ struct ExportResultCard: View {
                 .buttonStyle(.plain)
             }
 
-            AnimatedGIFView(url: result.url)
+            ExportPreviewView(url: result.url, format: result.format)
                 .frame(width: 280, height: 175)
                 .background(RoundedRectangle(cornerRadius: 8).fill(.black))
                 .clipShape(RoundedRectangle(cornerRadius: 8))
                 .onDrag { NSItemProvider(object: result.url as NSURL) }
-                .help("Drag this GIF into any app")
+                .help("Drag this file into another app")
 
             HStack {
                 Text("\(result.size.width)×\(result.size.height) · \(result.frames) frames")
@@ -498,7 +511,7 @@ struct ExportResultCard: View {
                     .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(SubtleButtonStyle())
-                .help("Copy the GIF file — paste into Slack, Messages, etc.")
+                .help("Copy the exported file — paste into another app.")
             }
         }
         .padding(16)

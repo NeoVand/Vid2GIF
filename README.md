@@ -1,8 +1,8 @@
 # Vid2GIF
 
-A blazingly fast, native macOS video → GIF converter. Zero dependencies — pure Swift on AVFoundation, VideoToolbox, and SwiftUI.
+A fast, native macOS video → GIF and WebM converter. GIF encoding is pure Swift on AVFoundation, VideoToolbox, and SwiftUI; WebM uses an installed FFmpeg encoder.
 
-![](https://img.shields.io/badge/platform-macOS%2014%2B-blue) ![](https://img.shields.io/badge/deps-none-brightgreen)
+![](https://img.shields.io/badge/platform-macOS%2014%2B-blue)
 
 ![Vid2GIF](assets/screenshot.png)
 
@@ -17,7 +17,7 @@ Measured on an Apple Silicon Mac: a 36-second 2182×1464 screen recording conver
 
 ## The live preview
 
-The preview pane shows the *actual encoded GIF* — real palette, real dithering, real timing — and regenerates automatically (debounced) whenever you touch a setting or trim handle, with the exact output file size in the corner. No export-and-check loop; what you see is byte-for-byte what you save.
+The preview pane shows the *actual encoded output* and regenerates automatically (debounced) whenever you touch a setting or trim handle, with the exact output file size in the corner. GIF previews use the real palette, dithering, and timing. WebM previews play the encoded video through WebKit, with controls for seeking and audio (muted initially).
 
 ## Features
 
@@ -25,15 +25,28 @@ The preview pane shows the *actual encoded GIF* — real palette, real dithering
 - Filmstrip timeline with draggable trim handles and playhead scrubbing
 - Keyboard: **Space** play/pause · **I**/**O** set in/out points · **←**/**→** frame step · **⌘E** export
 - Output width presets, 10–30 fps, 0.25–4× playback speed
-- 64/128/256 colors; Bayer (ordered), Floyd–Steinberg (diffusion), or no dithering
-- Loop-forever toggle and "optimize static areas" (delta encoding) toggle
-- Result card with animated preview — drag it straight into Slack, or Reveal/Copy
+- **GIF / WebM format selector** — both respect trim, output width, frame rate, and speed
+- GIF: 64/128/256 colors; Bayer (ordered), Floyd–Steinberg (diffusion), or no dithering
+- GIF: loop-forever and "optimize static areas" (delta encoding) toggles
+- WebM: VP9 video with Compact, Balanced, and High quality presets; optional Opus audio with pitch-preserving speed adjustment
+- Result card with format-specific preview, drag-and-drop, Reveal in Finder, and Copy
+- Cancel an export safely; existing destination files are replaced only after encoding succeeds
+
+WebM preserves full color; GIF palette, dithering, delta, and loop settings apply only to GIF. Looping a WebM is controlled by its player or embedding website. The in-app WebM preview loops for convenience.
 
 ## Build & run
 
 ```bash
 make run        # builds build/Vid2GIF.app and opens it
 ```
+
+For WebM export, install FFmpeg with VP9 (`libvpx-vp9`) and Opus (`libopus`) support:
+
+```bash
+brew install ffmpeg
+```
+
+The app finds FFmpeg in its resources, standard Homebrew locations, or `PATH`, including when launched from Finder. FFmpeg is not bundled by `make app`. GIF export needs no external dependencies; if FFmpeg is missing, WebM displays an actionable error.
 
 ## CLI
 
@@ -43,9 +56,15 @@ The same engine is scriptable:
 .build/release/Vid2GIF convert input.mov output.gif \
   --width 640 --fps 15 --start 2.5 --end 8 --speed 1.5 \
   --colors 256 --dither bayer
+
+.build/release/Vid2GIF convert input.mov output.webm \
+  --width 640 --fps 24 --start 2.5 --end 8 --speed 1.5 \
+  --quality high
 ```
 
-Flags: `--width` `--fps` `--start` `--end` `--speed` `--colors` `--dither bayer|fs|none` `--no-loop` `--no-delta`.
+The output extension selects the format (`.gif` or `.webm`). Shared flags: `--width` `--fps` `--start` `--end` `--speed`. WebM: `--quality compact|balanced|high`, `--no-audio`. GIF: `--colors`, `--dither bayer|fs|none`, `--no-loop`, `--no-delta`.
+
+Run `swift test` for argument validation, safe cancellation/replacement, and actual encoding checks for timing, dimensions, frame rate, quality, audio, silent inputs, and GIF regression. Integration checks require FFmpeg and ffprobe and skip when unavailable.
 
 ## Architecture
 
@@ -57,13 +76,15 @@ Sources/Vid2GIF/
 │   ├── Quantizer.swift      # Bayer / Floyd–Steinberg / none → palette indices
 │   ├── LZWEncoder.swift     # GIF-flavor LZW (12-bit, variable width)
 │   ├── GIFWriter.swift      # GIF89a streaming writer, delta frames, timing
-│   └── GIFExporter.swift    # two-pass orchestration (palette pass → encode pass)
+│   ├── GIFExporter.swift    # two-pass orchestration (palette pass → encode pass)
+│   ├── WebMExporter.swift   # cancellable FFmpeg VP9/Opus encoding with progress
+│   └── MediaExporter.swift  # format routing, validation, atomic output replacement
 ├── App/                     # AppDelegate, AppModel (state, player, live preview)
 ├── UI/                      # SwiftUI: editor, timeline, controls, export views
 └── CLI.swift                # headless convert command
 ```
 
-Export is two passes: pass 1 samples ~24 frames via `AVAssetImageGenerator` to build a global palette; pass 2 streams every frame through quantize → LZW → disk, so memory stays flat regardless of clip length.
+GIF export is two passes: pass 1 samples ~24 frames via `AVAssetImageGenerator` to build a global palette; pass 2 streams every frame through quantize → LZW → disk, so memory stays flat regardless of clip length. WebM uses constant-quality VP9 encoding with CRF 42 / 32 / 22 for Compact / Balanced / High. FFmpeg handles orientation, trimming, scaling, frame-rate resampling, and audio speed adjustment.
 
 ## Credits
 
